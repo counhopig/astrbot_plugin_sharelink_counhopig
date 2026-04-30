@@ -1,4 +1,6 @@
-# astrbot_plugin_sharelink_counhopig
+# AstrBot 分享链接解析插件
+
+> 🤖 **本插件的全部代码、架构设计、功能规划与文档，均由 AI（GitHub Copilot · Claude Sonnet）全程管理和撰写，作者仅提供产品方向与验收。**
 
 AstrBot 第三方分享链接解析插件，当前主要支持 Bilibili（B站）链接解析，同时包含 YouTube 适配器预览。
 
@@ -31,9 +33,9 @@ pip install -r astrbot_plugin_sharelink_counhopig/requirements.txt
 
 然后重启 AstrBot。
 
-## 配置
+## 配置项
 
-在 AstrBot 管理面板中配置以下选项：
+在 AstrBot 管理后台的插件配置页面中进行配置：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
@@ -67,7 +69,7 @@ BV号: BV1xx4x1x7xx
 
 当 AstrBot 启用 Agent 模式时，LLM 可以自动调用 `bilibili_parse_link` 工具解析链接。
 
-## 支持的链接格式
+### 支持的链接格式
 
 - B站完整链接：`https://www.bilibili.com/video/BV1xx4x1x7xx`
 - B站短链：`https://b23.tv/xxxxx`
@@ -109,15 +111,6 @@ astrbot_plugin_sharelink_counhopig/
 - [ ] 支持视频内容总结
 - [ ] 完善 YouTube 适配器
 
-## 许可证
+## 开源协议
 
 MIT License
-
-## 作者
-
-- **counhopig**
-- GitHub: [@counhopig](https://github.com/counhopig)
-
-## 致谢
-
-感谢 [AstrBot](https://github.com/AstrBot/AstrBot) 提供的机器人框架支持。
