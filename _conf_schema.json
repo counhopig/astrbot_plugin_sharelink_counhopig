@@ -27,7 +27,7 @@
     "type": "object",
     "default": {},
     "description": "B站 Cookie 配置（用于获取高质量字幕）",
-    "properties": {
+    "items": {
       "sessdata": {
         "type": "string",
         "default": "",
