@@ -47,6 +47,8 @@ pip install -r astrbot_plugin_sharelink_counhopig/requirements.txt
 | `description_max_length` | integer | `120` | 简介最大输出长度（最小 20） |
 | `bilibili_cookie.sessdata` | string | `""` | B站 SESSDATA，用于获取高质量字幕 |
 | `bilibili_cookie.bili_jct` | string | `""` | B站 bili_jct（可选） |
+| `summarize_provider_id` | string | `""` | 总结视频的 AI 模型。指定 LLM Provider 在插件内部自动总结字幕；留空则直接返回原始字幕 |
+| `stt_provider_id` | string | `""` | 音频转文字的 STT 模型。指定 STT Provider 用于字幕不可用时下载音频转录；留空则使用当前会话默认 STT Provider |
 
 ### B站 Cookie 配置
 

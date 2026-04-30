@@ -200,7 +200,7 @@ class BilibiliAdapter(BasePlatformAdapter):
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
-                    "preferredcodec": "m4a",
+                    "preferredcodec": "mp3",
                     "preferredquality": "192",
                 }
             ],
@@ -228,7 +228,7 @@ class BilibiliAdapter(BasePlatformAdapter):
             )
 
             expected_path = os.path.join(
-                temp_dir, f"bilibili_audio_{video_id}.m4a"
+                temp_dir, f"bilibili_audio_{video_id}.mp3"
             )
             if os.path.exists(expected_path):
                 logger.info(

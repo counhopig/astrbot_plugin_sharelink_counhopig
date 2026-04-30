@@ -18,7 +18,7 @@ from .platforms import BilibiliAdapter, PlatformRegistry
     "astrbot_plugin_sharelink_counhopig",
     "counhopig",
     "第三方分享链接解析插件（当前仅支持 Bilibili）",
-    "1.2.0",
+        "1.3.0",
 )
 class ShareLinkParserPlugin(Star):
     """第三方分享链接解析插件。"""
@@ -35,6 +35,14 @@ class ShareLinkParserPlugin(Star):
         if self.description_max_length < 20:
             self.description_max_length = 20
         self._registry = PlatformRegistry()
+        self.CHUNK_SIZE = 4000
+        self._content_cache: dict[str, str] = {}
+        self.summarize_provider_id = str(
+            self.config.get("summarize_provider_id", "")
+        ).strip()
+        self.stt_provider_id = str(
+            self.config.get("stt_provider_id", "")
+        ).strip()
 
     async def initialize(self):
         # 读取 B站 Cookie 配置
@@ -58,7 +66,9 @@ class ShareLinkParserPlugin(Star):
         logger.info("[ShareLinkParser] 插件已卸载")
 
     @filter.llm_tool(name="bilibili_parse_link")
-    async def bilibili_parse_link(self, event: AstrMessageEvent, target: str) -> str:
+    async def bilibili_parse_link(
+        self, event: AstrMessageEvent, target: str
+    ) -> str:
         """解析 B站分享链接并返回结构化信息。
 
         Args:
@@ -133,10 +143,15 @@ class ShareLinkParserPlugin(Star):
             event, adapter, video_id
         )
         if content_text:
+            self._content_cache[video_id] = content_text
+            # 优先用 LLM 内部总结；失败则回退到原始字幕
+            summarized = await self._summarize_content(
+                event, content_text
+            )
             lines.append("")
             lines.append("---")
             lines.append("视频内容:")
-            lines.append(content_text)
+            lines.append(summarized or content_text)
 
         return True, "\n".join(lines)
 
@@ -149,7 +164,7 @@ class ShareLinkParserPlugin(Star):
         """尝试获取视频内容：先字幕，失败则下载音频并用 STT 转录。"""
         # 1. 尝试获取字幕
         try:
-            subtitles = await adapter.fetch_subtitles(video_id)
+            subtitles = await adapter.fetch_subtitles(video_id, max_length=500000)
             if subtitles:
                 logger.info(
                     "[ShareLinkParser] 字幕获取成功: %s (%d 字符)",
@@ -184,9 +199,14 @@ class ShareLinkParserPlugin(Star):
         # 3. 使用 AstrBot STT 转录音频
         transcribed = None
         try:
-            stt_provider = self.context.get_using_stt_provider(
-                umo=event.unified_msg_origin
-            )
+            if self.stt_provider_id:
+                stt_provider = self.context.get_provider_by_id(
+                    self.stt_provider_id
+                )
+            else:
+                stt_provider = self.context.get_using_stt_provider(
+                    umo=event.unified_msg_origin
+                )
             if stt_provider:
                 logger.info(
                     "[ShareLinkParser] 使用 STT 转录音频: %s", audio_path
@@ -237,4 +257,103 @@ class ShareLinkParserPlugin(Star):
         if hours > 0:
             return "%d小时%d分%d秒" % (hours, minutes, sec)
         return "%d分%d秒" % (minutes, sec)
+
+    async def _summarize_content(
+        self, event: AstrMessageEvent, content_text: str
+    ) -> str | None:
+        """调用 LLM 对视频字幕进行总结。内容过长时内部分页处理。"""
+        if not self.summarize_provider_id:
+            return None
+
+        try:
+            # 短内容直接一次性总结
+            if len(content_text) <= 12000:
+                return await self._llm_summarize_once(
+                    event, content_text
+                )
+
+            # 长内容：内部分页 → 分段提取要点 → 合并总结
+            return await self._llm_summarize_long(
+                event, content_text
+            )
+        except Exception as e:
+            logger.warning(
+                "[ShareLinkParser] LLM 总结失败，回退到原始字幕: %s", e
+            )
+            return None
+
+    async def _llm_summarize_once(
+        self, event: AstrMessageEvent, text: str
+    ) -> str:
+        """一次性总结（适用于短内容）。"""
+        prompt = (
+            "请对以下视频字幕内容进行总结，提取核心要点。\n\n"
+            f"字幕内容：\n{text}\n\n"
+            "要求：\n"
+            "1. 先给出 2-3 句话的整体概要\n"
+            "2. 再列出 3-5 个关键要点\n"
+            "3. 保持客观中立，不要添加个人评价\n"
+            "4. 使用中文输出"
+        )
+
+        resp = await self.context.llm_generate(
+            chat_provider_id=self.summarize_provider_id,
+            prompt=prompt,
+        )
+        return resp.completion_text or ""
+
+    async def _llm_summarize_long(
+        self, event: AstrMessageEvent, text: str
+    ) -> str:
+        """长内容分页总结：分段提取要点后合并。"""
+        chunk_size = 8000
+        chunks = [
+            text[i : i + chunk_size]
+            for i in range(0, len(text), chunk_size)
+        ]
+
+        logger.info(
+            "[ShareLinkParser] 字幕较长 (%d 字符)，分 %d 段总结",
+            len(text),
+            len(chunks),
+        )
+
+        # 1. Map：每段提取要点
+        summaries: list[str] = []
+        for idx, chunk in enumerate(chunks, 1):
+            prompt = (
+                f"这是视频字幕的第 {idx}/{len(chunks)} 部分，"
+                f"请提取其中的关键信息要点：\n\n{chunk}\n\n"
+                "要求：只输出要点列表，不要输出总结性语句。"
+            )
+            resp = await self.context.llm_generate(
+                chat_provider_id=self.summarize_provider_id,
+                prompt=prompt,
+            )
+            part = (resp.completion_text or "").strip()
+            if part:
+                summaries.append(part)
+
+        if not summaries:
+            return ""
+
+        # 2. Reduce：合并所有要点生成最终总结
+        merged = "\n\n".join(
+            f"【第 {i + 1} 部分要点】\n{s}"
+            for i, s in enumerate(summaries)
+        )
+        final_prompt = (
+            "以下是视频各分段提取的要点，请整合为一份完整的视频总结：\n\n"
+            f"{merged}\n\n"
+            "要求：\n"
+            "1. 先给出 2-3 句话的整体概要\n"
+            "2. 再列出 3-5 个关键要点\n"
+            "3. 保持客观中立\n"
+            "4. 使用中文输出"
+        )
+        resp = await self.context.llm_generate(
+            chat_provider_id=self.summarize_provider_id,
+            prompt=final_prompt,
+        )
+        return resp.completion_text or ""
 

@@ -41,5 +41,19 @@
         "hint": "从浏览器 Cookie 中复制 bili_jct 值（可选）"
       }
     }
+  },
+  "summarize_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "总结视频的 AI 模型",
+    "hint": "指定一个 LLM Provider 用于总结字幕内容。留空则直接返回原始字幕，由外层 Agent 自行总结",
+    "_special": "select_provider"
+  },
+  "stt_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "音频转文字的 STT 模型",
+    "hint": "指定一个 STT Provider 用于字幕不可用时下载音频转录。留空则使用当前会话默认的 STT Provider",
+    "_special": "select_provider_stt"
   }
 }
