@@ -11,14 +11,14 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from platforms import BilibiliAdapter, PlatformRegistry
+from .platforms import BilibiliAdapter, PlatformRegistry
 
 
 @register(
     "astrbot_plugin_sharelink_counhopig",
     "counhopig",
     "第三方分享链接解析插件（当前仅支持 Bilibili）",
-    "1.0.0",
+    "1.0.1",
 )
 class ShareLinkParserPlugin(Star):
     """第三方分享链接解析插件。"""
