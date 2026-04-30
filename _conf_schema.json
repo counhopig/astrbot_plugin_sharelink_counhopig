@@ -1,0 +1,26 @@
+{
+  "response_mode": {
+    "type": "string",
+    "default": "detailed",
+    "description": "解析结果输出模式",
+    "hint": "detailed（详细版）或 simple（简版）"
+  },
+  "include_description": {
+    "type": "boolean",
+    "default": true,
+    "description": "是否包含视频简介",
+    "hint": "关闭后解析结果不输出简介"
+  },
+  "include_cover": {
+    "type": "boolean",
+    "default": true,
+    "description": "是否包含封面链接",
+    "hint": "关闭后解析结果不输出封面链接"
+  },
+  "description_max_length": {
+    "type": "integer",
+    "default": 120,
+    "description": "简介最大输出长度",
+    "hint": "超过该长度将被截断，最小值为 20"
+  }
+}
