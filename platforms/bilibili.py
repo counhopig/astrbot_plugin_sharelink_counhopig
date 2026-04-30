@@ -7,7 +7,10 @@ Bilibili（B站）平台适配器。
 
 from __future__ import annotations
 
+import asyncio
+import os
 import re
+import tempfile
 import traceback
 from typing import Optional
 from urllib.parse import urlparse
@@ -31,6 +34,19 @@ BILIBILI_API_HEADERS = {
     ),
     "Referer": "https://www.bilibili.com/",
 }
+
+# ─── yt-dlp 懒加载 ───────────────────────────────────────────────────────────
+
+_yt_dlp = None
+
+
+def _get_yt_dlp():
+    global _yt_dlp
+    if _yt_dlp is None:
+        import yt_dlp
+
+        _yt_dlp = yt_dlp
+    return _yt_dlp
 
 
 class BilibiliAdapter(BasePlatformAdapter):
@@ -184,6 +200,114 @@ class BilibiliAdapter(BasePlatformAdapter):
     def get_video_url(self, video_id: str) -> str:
         """返回 B站视频完整 URL（供 yt-dlp 使用）。"""
         return f"https://www.bilibili.com/video/BV{video_id}"
+
+    async def download_audio(
+        self, video_id: str, timeout: int = 300
+    ) -> Optional[str]:
+        """使用 yt-dlp 下载视频音频作为字幕后备方案。
+
+        Args:
+            video_id: BV 号（不含 BV 前缀）。
+            timeout: 下载超时秒数。
+
+        Returns:
+            下载的音频文件本地路径（m4a 格式），失败返回 None。
+        """
+        try:
+            yt_dlp = _get_yt_dlp()
+        except ImportError:
+            logger.error(
+                "[BilibiliAdapter] yt-dlp 未安装，"
+                "请执行: pip install yt-dlp"
+            )
+            return None
+
+        video_url = self.get_video_url(video_id)
+        temp_dir = tempfile.gettempdir()
+        output_template = os.path.join(
+            temp_dir, f"bilibili_audio_{video_id}.%(ext)s"
+        )
+
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "m4a",
+                    "preferredquality": "192",
+                }
+            ],
+            "outtmpl": output_template,
+            "restrict_filenames": True,
+            "http_headers": {
+                "User-Agent": BILIBILI_API_HEADERS["User-Agent"],
+                "Referer": "https://www.bilibili.com/",
+            },
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+        }
+
+        try:
+            loop = asyncio.get_running_loop()
+
+            def _download():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([video_url])
+
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _download),
+                timeout=timeout,
+            )
+
+            expected_path = os.path.join(
+                temp_dir, f"bilibili_audio_{video_id}.m4a"
+            )
+            if os.path.exists(expected_path):
+                logger.info(
+                    f"[BilibiliAdapter] 音频下载成功: {expected_path}"
+                )
+                return expected_path
+
+            # 兜底查找
+            for fname in os.listdir(temp_dir):
+                if fname.startswith(f"bilibili_audio_{video_id}"):
+                    fpath = os.path.join(temp_dir, fname)
+                    logger.info(
+                        f"[BilibiliAdapter] 音频下载成功: {fpath}"
+                    )
+                    return fpath
+
+            logger.warning(
+                f"[BilibiliAdapter] 音频下载后未找到文件: {video_id}"
+            )
+            return None
+
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[BilibiliAdapter] 音频下载超时 ({timeout}s): {video_id}"
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"[BilibiliAdapter] 音频下载失败: {video_id} "
+                f"{e}\n{traceback.format_exc()}"
+            )
+            return None
+
+    @staticmethod
+    def cleanup_audio(audio_path: str) -> None:
+        """清理下载的临时音频文件。"""
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+                logger.debug(
+                    f"[BilibiliAdapter] 已清理临时音频: {audio_path}"
+                )
+            except OSError as e:
+                logger.warning(
+                    f"[BilibiliAdapter] 清理音频失败: {audio_path} {e}"
+                )
 
     # ── 内部方法 ──────────────────────────────────────────────────────────
 

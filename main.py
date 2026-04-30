@@ -18,7 +18,7 @@ from .platforms import BilibiliAdapter, PlatformRegistry
     "astrbot_plugin_sharelink_counhopig",
     "counhopig",
     "第三方分享链接解析插件（当前仅支持 Bilibili）",
-    "1.0.2",
+    "1.1.0",
 )
 class ShareLinkParserPlugin(Star):
     """第三方分享链接解析插件。"""
@@ -59,16 +59,19 @@ class ShareLinkParserPlugin(Star):
         if not effective_target:
             return "请输入有效的 B站链接、b23短链或 BV 号。"
 
-        _, text = await self._parse_target_to_text(effective_target)
+        _, text = await self._parse_target_to_text(event, effective_target)
         return text
 
-    async def _parse_target_to_text(self, target: str) -> tuple[bool, str]:
+    async def _parse_target_to_text(
+        self, event: AstrMessageEvent, target: str
+    ) -> tuple[bool, str]:
         """解析目标并返回 (是否成功, 输出文本)。"""
         adapter = self._registry.match(target)
         if not adapter:
             return (
                 False,
-                "暂不支持该链接。当前仅支持: %s" % ", ".join(self._registry.platforms),
+                "暂不支持该链接。当前仅支持: %s"
+                % ", ".join(self._registry.platforms),
             )
 
         resolved_url = await adapter.resolve_url(target)
@@ -115,7 +118,92 @@ class ShareLinkParserPlugin(Star):
         if self.include_cover and metadata.thumbnail_url:
             lines.append("封面: %s" % metadata.thumbnail_url)
 
+        # ── 字幕 / 音频转录 ──────────────────────────────────────────────
+        content_text = await self._fetch_content_with_fallback(
+            event, adapter, video_id
+        )
+        if content_text:
+            lines.append("")
+            lines.append("---")
+            lines.append("视频内容:")
+            lines.append(content_text)
+
         return True, "\n".join(lines)
+
+    async def _fetch_content_with_fallback(
+        self,
+        event: AstrMessageEvent,
+        adapter,
+        video_id: str,
+    ) -> str | None:
+        """尝试获取视频内容：先字幕，失败则下载音频并用 STT 转录。"""
+        # 1. 尝试获取字幕
+        try:
+            subtitles = await adapter.fetch_subtitles(video_id)
+            if subtitles:
+                logger.info(
+                    "[ShareLinkParser] 字幕获取成功: %s (%d 字符)",
+                    video_id,
+                    len(subtitles),
+                )
+                return subtitles
+        except Exception as e:
+            logger.warning(
+                "[ShareLinkParser] 字幕获取异常: %s %s", video_id, e
+            )
+
+        # 2. 字幕不可用，尝试下载音频
+        logger.info(
+            "[ShareLinkParser] 字幕不可用，尝试下载音频: %s", video_id
+        )
+        audio_path = None
+        try:
+            audio_path = await adapter.download_audio(video_id)
+        except Exception as e:
+            logger.error(
+                "[ShareLinkParser] 音频下载异常: %s %s", video_id, e
+            )
+
+        if not audio_path:
+            logger.warning(
+                "[ShareLinkParser] 音频下载失败，无法获取内容: %s",
+                video_id,
+            )
+            return None
+
+        # 3. 使用 AstrBot STT 转录音频
+        transcribed = None
+        try:
+            stt_provider = self.context.get_using_stt_provider(
+                umo=event.unified_msg_origin
+            )
+            if stt_provider:
+                logger.info(
+                    "[ShareLinkParser] 使用 STT 转录音频: %s", audio_path
+                )
+                transcribed = await stt_provider.get_text(audio_path)
+                if transcribed:
+                    logger.info(
+                        "[ShareLinkParser] STT 转录成功: %s (%d 字符)",
+                        video_id,
+                        len(transcribed),
+                    )
+            else:
+                logger.warning(
+                    "[ShareLinkParser] 未配置 STT Provider，"
+                    "跳过音频转录: %s",
+                    video_id,
+                )
+        except Exception as e:
+            logger.error(
+                "[ShareLinkParser] STT 转录失败: %s %s", video_id, e
+            )
+        finally:
+            # 无论成功与否，清理临时音频
+            if hasattr(adapter, "cleanup_audio"):
+                adapter.cleanup_audio(audio_path)
+
+        return transcribed
 
     @staticmethod
     def _extract_target(message: str) -> str | None:
