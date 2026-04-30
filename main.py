@@ -18,7 +18,7 @@ from .platforms import BilibiliAdapter, PlatformRegistry
     "astrbot_plugin_sharelink_counhopig",
     "counhopig",
     "第三方分享链接解析插件（当前仅支持 Bilibili）",
-    "1.0.1",
+    "1.0.2",
 )
 class ShareLinkParserPlugin(Star):
     """第三方分享链接解析插件。"""
