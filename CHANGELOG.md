@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-01
+
+### Added
+- **bilibili-api-python 集成**：优先使用 `bilibili-api-python` 官方库获取视频信息和字幕，REST API 作为后备。
+- **B站 Cookie 鉴权**：可配置 `SESSDATA` / `bili_jct`，显著提升字幕获取成功率（需登录才能获取的字幕现在也能拿到）。
+
+### Changed
+- `BilibiliAdapter` 构造函数支持可选的 Cookie 参数。
+- 字幕获取使用 `bilibili-api` 的 `video.get_subtitle()` 方法，语言匹配逻辑与 biliread 对齐。
+
 ## [1.1.0] - 2026-05-01
 
 ### Added

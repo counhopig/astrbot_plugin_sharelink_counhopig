@@ -3,7 +3,7 @@
     "type": "string",
     "default": "detailed",
     "description": "解析结果输出模式",
-    "hint": "detailed（详细版）或 simple（简版）"
+    "hint": "detailed（详细版）或 simple（简洁）"
   },
   "include_description": {
     "type": "bool",
@@ -22,5 +22,25 @@
     "default": 120,
     "description": "简介最大输出长度",
     "hint": "超过该长度将被截断，最小值为 20"
+  },
+  "bilibili_cookie": {
+    "type": "object",
+    "default": {},
+    "description": "B站 Cookie 配置（用于获取高质量字幕）",
+    "properties": {
+      "sessdata": {
+        "type": "string",
+        "default": "",
+        "description": "SESSDATA",
+        "hint": "从浏览器 Cookie 中复制 SESSDATA 值，可提升字幕获取成功率"
+      },
+      "bili_jct": {
+        "type": "string",
+        "default": "",
+        "description": "bili_jct",
+        "hint": "从浏览器 Cookie 中复制 bili_jct 值（可选）"
+      }
+    }
   }
+}
 }

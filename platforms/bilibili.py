@@ -1,8 +1,8 @@
 """
 Bilibili（B站）平台适配器。
 
-将原 main.py 中所有 B站相关逻辑迁移至此处，
-包括 URL 解析、视频信息获取、字幕提取等。
+使用 bilibili-api-python 获取视频信息与字幕，
+同时保留 REST API 作为后备方案。
 """
 
 from __future__ import annotations
@@ -35,9 +35,10 @@ BILIBILI_API_HEADERS = {
     "Referer": "https://www.bilibili.com/",
 }
 
-# ─── yt-dlp 懒加载 ───────────────────────────────────────────────────────────
+# ─── 懒加载 ───────────────────────────────────────────────────────────────────
 
 _yt_dlp = None
+_bilibili_api_available: bool | None = None
 
 
 def _get_yt_dlp():
@@ -49,8 +50,34 @@ def _get_yt_dlp():
     return _yt_dlp
 
 
+def _check_bilibili_api() -> bool:
+    global _bilibili_api_available
+    if _bilibili_api_available is None:
+        try:
+            import bilibili_api  # noqa: F401
+
+            _bilibili_api_available = True
+        except ImportError:
+            _bilibili_api_available = False
+    return _bilibili_api_available
+
+
 class BilibiliAdapter(BasePlatformAdapter):
     """Bilibili（B站）视频适配器。"""
+
+    def __init__(self, sessdata: str = "", bili_jct: str = "") -> None:
+        self._sessdata = sessdata
+        self._bili_jct = bili_jct
+        self._use_api = _check_bilibili_api()
+        if self._use_api:
+            logger.info(
+                "[BilibiliAdapter] bilibili-api-python 已加载，将使用官方库获取信息"
+            )
+        else:
+            logger.info(
+                "[BilibiliAdapter] bilibili-api-python 未安装，"
+                "使用 REST API 回落"
+            )
 
     @property
     def name(self) -> str:
@@ -64,10 +91,8 @@ class BilibiliAdapter(BasePlatformAdapter):
 
     def match(self, url: str) -> bool:
         """判断 URL 是否为 B站链接或纯 BV/AV 号。"""
-        # 纯 BV/AV 号
         if BVID_PATTERN.search(url) or AVID_PATTERN.search(url):
             return True
-        # 完整 URL
         try:
             parsed = urlparse(url)
             if "bilibili.com" in parsed.netloc or "b23.tv" in parsed.netloc:
@@ -77,18 +102,10 @@ class BilibiliAdapter(BasePlatformAdapter):
         return False
 
     def extract_id(self, url: str) -> Optional[str]:
-        """从 URL 或纯 ID 中提取 BV 号（不含 BV 前缀）。
-
-        支持格式:
-        - BV1xx4x1x7xx
-        - https://www.bilibili.com/video/BV1xx4x1x7xx
-        - https://b23.tv/xxxxx（需先 resolve_url）
-        - av123456（会转为 BV，但 API 不保证支持，优先 BV）
-        """
+        """从 URL 或纯 ID 中提取 BV 号（不含 BV 前缀）。"""
         match = BVID_PATTERN.search(url)
         if match:
             return match.group(1)
-        # AV 号暂不转换，返回 None（B站 API 已逐步弃用 AV 号）
         return None
 
     async def resolve_url(self, url: str) -> Optional[str]:
@@ -120,82 +137,41 @@ class BilibiliAdapter(BasePlatformAdapter):
     # ── 数据获取 ──────────────────────────────────────────────────────────
 
     async def fetch_metadata(self, video_id: str) -> Optional[VideoMetadata]:
-        """从 B站 API 获取视频元信息。
+        """获取视频元信息。
 
-        Args:
-            video_id: BV 号（不含 BV 前缀），如 "1xx4x1x7xx"。
+        优先使用 bilibili-api-python（支持 Cookie 鉴权），
+        失败时回落到 REST API。
         """
-        api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={video_id}"
-        try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=15),
-                headers=BILIBILI_API_HEADERS,
-            ) as session:
-                async with session.get(api_url) as resp:
-                    if resp.status != 200:
-                        logger.warning(
-                            f"[BilibiliAdapter] API 返回 {resp.status}"
-                        )
-                        return None
-                    data = await resp.json()
-                    if data.get("code") != 0:
-                        logger.warning(
-                            f"[BilibiliAdapter] API 错误: {data.get('message')}"
-                        )
-                        return None
-
-                    result = data.get("data", {})
-                    pages = result.get("pages", [])
-                    cid = pages[0]["cid"] if pages else None
-
-                    return VideoMetadata(
-                        video_id=video_id,
-                        title=result.get("title", ""),
-                        platform=self.name,
-                        description=result.get("desc", ""),
-                        duration=result.get("duration", 0),
-                        owner=result.get("owner", {}).get("name", ""),
-                        thumbnail_url=result.get("pic", ""),
-                        extra={"cid": cid},
-                    )
-        except aiohttp.ClientError as e:
-            logger.error(f"[BilibiliAdapter] 网络错误: {e}")
-            return None
-        except Exception as e:
-            logger.error(
-                f"[BilibiliAdapter] 获取视频信息失败: "
-                f"{e}\n{traceback.format_exc()}"
+        if self._use_api:
+            result = await self._fetch_metadata_via_api(video_id)
+            if result:
+                return result
+            logger.info(
+                "[BilibiliAdapter] bilibili-api 获取元信息失败，"
+                "回落到 REST API"
             )
-            return None
+
+        return await self._fetch_metadata_via_rest(video_id)
 
     async def fetch_subtitles(
         self, video_id: str, max_length: int = 4000
     ) -> Optional[str]:
-        """从 B站 API 获取视频字幕文本。
+        """获取视频字幕文本。
 
-        Args:
-            video_id: BV 号（不含 BV 前缀）。
-            max_length: 最大字符数，超出截断。
+        优先使用 bilibili-api-python，失败时回落到 REST API。
         """
-        # 需要先获取 cid
-        metadata = await self.fetch_metadata(video_id)
-        if not metadata:
-            return None
+        if self._use_api:
+            result = await self._fetch_subtitles_via_api(
+                video_id, max_length
+            )
+            if result:
+                return result
+            logger.info(
+                "[BilibiliAdapter] bilibili-api 获取字幕失败，"
+                "回落到 REST API"
+            )
 
-        cid = metadata.extra.get("cid")
-        if not cid:
-            return None
-
-        return await self._fetch_subtitle_by_cid(video_id, cid, max_length)
-
-    async def fetch_subtitles_with_cid(
-        self, video_id: str, cid: int, max_length: int = 4000
-    ) -> Optional[str]:
-        """直接使用 cid 获取字幕（避免重复请求元信息）。
-
-        当已经通过 fetch_metadata 拿到 cid 时，应使用此方法。
-        """
-        return await self._fetch_subtitle_by_cid(video_id, cid, max_length)
+        return await self._fetch_subtitles_via_rest(video_id, max_length)
 
     def get_video_url(self, video_id: str) -> str:
         """返回 B站视频完整 URL（供 yt-dlp 使用）。"""
@@ -204,21 +180,12 @@ class BilibiliAdapter(BasePlatformAdapter):
     async def download_audio(
         self, video_id: str, timeout: int = 300
     ) -> Optional[str]:
-        """使用 yt-dlp 下载视频音频作为字幕后备方案。
-
-        Args:
-            video_id: BV 号（不含 BV 前缀）。
-            timeout: 下载超时秒数。
-
-        Returns:
-            下载的音频文件本地路径（m4a 格式），失败返回 None。
-        """
+        """使用 yt-dlp 下载视频音频作为字幕后备方案。"""
         try:
             yt_dlp = _get_yt_dlp()
         except ImportError:
             logger.error(
-                "[BilibiliAdapter] yt-dlp 未安装，"
-                "请执行: pip install yt-dlp"
+                "[BilibiliAdapter] yt-dlp 未安装，请执行: pip install yt-dlp"
             )
             return None
 
@@ -269,7 +236,6 @@ class BilibiliAdapter(BasePlatformAdapter):
                 )
                 return expected_path
 
-            # 兜底查找
             for fname in os.listdir(temp_dir):
                 if fname.startswith(f"bilibili_audio_{video_id}"):
                     fpath = os.path.join(temp_dir, fname)
@@ -309,14 +275,152 @@ class BilibiliAdapter(BasePlatformAdapter):
                     f"[BilibiliAdapter] 清理音频失败: {audio_path} {e}"
                 )
 
-    # ── 内部方法 ──────────────────────────────────────────────────────────
+    # ── bilibili-api-python 实现 ───────────────────────────────────────────
 
-    async def _fetch_subtitle_by_cid(
-        self, bvid: str, cid: int, max_length: int
+    async def _fetch_metadata_via_api(
+        self, video_id: str
+    ) -> Optional[VideoMetadata]:
+        """使用 bilibili-api-python 获取视频元信息（带 Cookie）。"""
+        from bilibili_api import video, Credential
+
+        credential = Credential(
+            sessdata=self._sessdata, bili_jct=self._bili_jct
+        )
+        bvid = f"BV{video_id}"
+        v = video.Video(bvid, credential=credential)
+
+        try:
+            info = await v.get_info()
+            return VideoMetadata(
+                video_id=video_id,
+                title=info.get("title", ""),
+                platform=self.name,
+                description=info.get("desc", ""),
+                duration=info.get("duration", 0),
+                owner=info.get("owner", {}).get("name", ""),
+                thumbnail_url=info.get("pic", ""),
+                extra={"cid": await v.get_cid(0)},
+            )
+        except Exception as e:
+            logger.warning(
+                f"[BilibiliAdapter] bilibili-api 获取元信息异常: {e}"
+            )
+            return None
+
+    async def _fetch_subtitles_via_api(
+        self, video_id: str, max_length: int = 4000
     ) -> Optional[str]:
-        """通过 BV号 + cid 获取字幕文本。"""
+        """使用 bilibili-api-python 获取视频字幕（带 Cookie）。"""
+        from bilibili_api import video, Credential
+
+        credential = Credential(
+            sessdata=self._sessdata, bili_jct=self._bili_jct
+        )
+        bvid = f"BV{video_id}"
+        v = video.Video(bvid, credential=credential)
+
+        try:
+            cid = await v.get_cid(0)
+            subtitle_info = await v.get_subtitle(cid)
+
+            if not subtitle_info or not subtitle_info.get("subtitles"):
+                logger.info(
+                    f"[BilibiliAdapter] bilibili-api: 视频 {video_id} 无字幕"
+                )
+                return None
+
+            # 优先中文字幕
+            target = None
+            for sub in subtitle_info["subtitles"]:
+                if sub.get("lan", "").startswith("zh"):
+                    target = sub
+                    break
+            if not target:
+                target = subtitle_info["subtitles"][0]
+
+            subtitle_url = target.get("subtitle_url", "")
+            if not subtitle_url:
+                return None
+
+            if not subtitle_url.startswith("http"):
+                subtitle_url = "https:" + subtitle_url
+
+            return await self._download_and_parse_subtitle(
+                subtitle_url, max_length
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"[BilibiliAdapter] bilibili-api 获取字幕异常: {e}"
+            )
+            return None
+
+    # ── REST API 后备实现 ──────────────────────────────────────────────────
+
+    async def _fetch_metadata_via_rest(
+        self, video_id: str
+    ) -> Optional[VideoMetadata]:
+        """REST API 后备：获取视频元信息。"""
+        api_url = (
+            f"https://api.bilibili.com/x/web-interface/view?bvid={video_id}"
+        )
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15),
+                headers=BILIBILI_API_HEADERS,
+            ) as session:
+                async with session.get(api_url) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            f"[BilibiliAdapter] REST API 返回 {resp.status}"
+                        )
+                        return None
+                    data = await resp.json()
+                    if data.get("code") != 0:
+                        logger.warning(
+                            f"[BilibiliAdapter] REST API 错误: "
+                            f"{data.get('message')}"
+                        )
+                        return None
+
+                    result = data.get("data", {})
+                    pages = result.get("pages", [])
+                    cid = pages[0]["cid"] if pages else None
+
+                    return VideoMetadata(
+                        video_id=video_id,
+                        title=result.get("title", ""),
+                        platform=self.name,
+                        description=result.get("desc", ""),
+                        duration=result.get("duration", 0),
+                        owner=result.get("owner", {}).get("name", ""),
+                        thumbnail_url=result.get("pic", ""),
+                        extra={"cid": cid},
+                    )
+        except aiohttp.ClientError as e:
+            logger.error(f"[BilibiliAdapter] REST 网络错误: {e}")
+            return None
+        except Exception as e:
+            logger.error(
+                f"[BilibiliAdapter] REST 获取元信息失败: "
+                f"{e}\n{traceback.format_exc()}"
+            )
+            return None
+
+    async def _fetch_subtitles_via_rest(
+        self, video_id: str, max_length: int = 4000
+    ) -> Optional[str]:
+        """REST API 后备：获取视频字幕。"""
+        metadata = await self._fetch_metadata_via_rest(video_id)
+        if not metadata:
+            return None
+
+        cid = metadata.extra.get("cid")
+        if not cid:
+            return None
+
         player_url = (
-            f"https://api.bilibili.com/x/player/v2?bvid={bvid}&cid={cid}"
+            f"https://api.bilibili.com/x/player/v2?bvid={video_id}&cid={cid}"
         )
         try:
             async with aiohttp.ClientSession(
@@ -338,7 +442,6 @@ class BilibiliAdapter(BasePlatformAdapter):
                     if not subtitle_info:
                         return None
 
-                    # 优先中文字幕，其次 AI 字幕
                     subtitle_url = ""
                     for sub in subtitle_info:
                         lang = sub.get("lan", "")
@@ -346,17 +449,43 @@ class BilibiliAdapter(BasePlatformAdapter):
                             subtitle_url = sub.get("subtitle_url", "")
                             break
                     if not subtitle_url:
-                        subtitle_url = subtitle_info[0].get("subtitle_url", "")
+                        subtitle_url = subtitle_info[0].get(
+                            "subtitle_url", ""
+                        )
                     if not subtitle_url:
                         return None
 
                     if subtitle_url.startswith("//"):
                         subtitle_url = "https:" + subtitle_url
 
-                async with session.get(subtitle_url) as sub_resp:
-                    if sub_resp.status != 200:
+                return await self._download_and_parse_subtitle(
+                    subtitle_url, max_length
+                )
+
+        except aiohttp.ClientError as e:
+            logger.error(f"[BilibiliAdapter] REST 字幕网络错误: {e}")
+            return None
+        except Exception as e:
+            logger.error(
+                f"[BilibiliAdapter] REST 字幕获取失败: "
+                f"{e}\n{traceback.format_exc()}"
+            )
+            return None
+
+    # ── 共享工具方法 ──────────────────────────────────────────────────────
+
+    async def _download_and_parse_subtitle(
+        self, subtitle_url: str, max_length: int
+    ) -> Optional[str]:
+        """下载并解析字幕 JSON 文件。"""
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as session:
+                async with session.get(subtitle_url) as resp:
+                    if resp.status != 200:
                         return None
-                    sub_data = await sub_resp.json()
+                    sub_data = await resp.json()
                     body = sub_data.get("body", [])
                     if not body:
                         return None
@@ -367,19 +496,17 @@ class BilibiliAdapter(BasePlatformAdapter):
                         return None
 
                     if len(full_text) > max_length:
-                        full_text = full_text[:max_length] + "\n...(字幕已截断)"
+                        full_text = (
+                            full_text[:max_length] + "\n...(字幕已截断)"
+                        )
                         logger.info(
                             f"[BilibiliAdapter] 字幕过长 → 已截断至 {max_length}"
                         )
 
                     return full_text
 
-        except aiohttp.ClientError as e:
-            logger.error(f"[BilibiliAdapter] 字幕获取网络错误: {e}")
-            return None
         except Exception as e:
             logger.error(
-                f"[BilibiliAdapter] 字幕获取失败: "
-                f"{e}\n{traceback.format_exc()}"
+                f"[BilibiliAdapter] 字幕下载/解析失败: {e}"
             )
             return None

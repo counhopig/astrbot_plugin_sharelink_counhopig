@@ -18,7 +18,7 @@ from .platforms import BilibiliAdapter, PlatformRegistry
     "astrbot_plugin_sharelink_counhopig",
     "counhopig",
     "第三方分享链接解析插件（当前仅支持 Bilibili）",
-    "1.1.0",
+    "1.2.0",
 )
 class ShareLinkParserPlugin(Star):
     """第三方分享链接解析插件。"""
@@ -37,7 +37,17 @@ class ShareLinkParserPlugin(Star):
         self._registry = PlatformRegistry()
 
     async def initialize(self):
-        self._registry.register(BilibiliAdapter())
+        # 读取 B站 Cookie 配置
+        bilibili_cookie = self.config.get("bilibili_cookie", {})
+        sessdata = ""
+        bili_jct = ""
+        if isinstance(bilibili_cookie, dict):
+            sessdata = str(bilibili_cookie.get("sessdata", "")).strip()
+            bili_jct = str(bilibili_cookie.get("bili_jct", "")).strip()
+
+        self._registry.register(
+            BilibiliAdapter(sessdata=sessdata, bili_jct=bili_jct)
+        )
         logger.info(
             "[ShareLinkParser] 插件已加载 | 支持平台: %s | 输出模式: %s",
             ", ".join(self._registry.platforms),

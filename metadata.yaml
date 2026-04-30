@@ -1,6 +1,6 @@
 name: "astrbot_plugin_sharelink_counhopig"
 author: "counhopig"
-version: "1.1.0"
+version: "1.2.0"
 desc: "第三方分享链接解析插件（当前仅支持 Bilibili）"
 display_name: "分享链接解析"
 repo: "https://github.com/counhopig/astrbot_plugin_sharelink_counhopig"
