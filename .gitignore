@@ -36,3 +36,6 @@ dist/
 
 # Local config
 .env
+
+# AI-generated knowledge base (not tracked)
+AGENTS.md
